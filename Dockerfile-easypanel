@@ -25,17 +25,15 @@ WORKDIR /var/www/vhosts/localhost/html
 # Copiar os arquivos do seu projeto
 COPY . .
 
-# CORREÇÃO DO ERRO: Procura no código por '->getApplication()' e corrige para '->getLaravel()'
-RUN find . -type f -name "*.php" -exec sed -i 's/->getApplication()/->getLaravel()/g' {} +
-
 # Limpar qualquer resquício antigo de dependências para evitar conflitos
 RUN rm -rf vendor node_modules package-lock.json
 
-# Rodar o Composer de forma limpa e nativa no PHP 8.2
+# 1º: Baixa todas as dependências do PHP e do Front-end
 RUN composer install --no-dev --optimize-autoloader --no-interaction --ignore-platform-reqs
-
-# Executar a instalação do NPM e build do front-end com o Node 22 limpo
 RUN if [ -f package.json ]; then npm install && npm run build; fi
+
+# 2º: AGORA SIM! Com toda a pasta 'vendor' baixada, aplicamos a correção em absolutamente TUDO
+RUN find . -type f -name "*.php" -exec sed -i 's/->getApplication()/->getLaravel()/g' {} +
 
 # Garantir a existência de TODAS as pastas críticas do Laravel
 RUN mkdir -p storage/logs \
