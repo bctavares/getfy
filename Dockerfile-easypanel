@@ -1,6 +1,6 @@
 FROM litespeedtech/openlitespeed:1.7.19-lsphp82
 
-# Instalar extensões PHP necessárias, utilitários e o CRON
+# Instalar extensões PHP, utilitários, CRON e ferramentas de build (Node.js e Composer)
 RUN apt-get update && apt-get install -y \
     lsphp82-mysql \
     lsphp82-imap \
@@ -10,37 +10,53 @@ RUN apt-get update && apt-get install -y \
     git \
     unzip \
     cron \
+    curl \
+    && curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer \
+    && curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
+    && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# Criar um link simbólico para garantir que o comando 'php' chame o PHP 8.2 correto com todos os pacotes do CLI
+# Garantir que o comando 'php' global aponte para o PHP 8.2 do LiteSpeed
 RUN ln -sf /usr/local/lsws/lsphp82/bin/php /usr/bin/php
 
 # Configurar o diretório de trabalho padrão dentro do container
-WORKDIR /var/www/vhosts/localhost
+WORKDIR /var/www/vhosts/localhost/html
 
-# Copiar os arquivos do seu projeto para a pasta 'html'
-COPY . ./html
+# Copiar os arquivos do seu projeto
+COPY . .
 
-# Garantir a existência de TODAS as pastas críticas do Laravel antes do deploy
-RUN mkdir -p html/storage/logs \
-    html/storage/framework/cache/data \
-    html/storage/framework/sessions \
-    html/storage/framework/views \
-    html/bootstrap/cache
+# CORREÇÃO DO ERRO: Procura no código por '->getApplication()' e corrige para '->getLaravel()'
+RUN find . -type f -name "*.php" -exec sed -i 's/->getApplication()/->getLaravel()/g' {} +
+
+# Limpar qualquer resquício antigo de dependências para evitar conflitos
+RUN rm -rf vendor node_modules
+
+# Rodar o Composer de forma limpa e nativa no PHP 8.2
+RUN composer install --no-dev --optimize-autoloader --no-interaction --ignore-platform-reqs
+
+# Se o projeto precisar de build do front-end, o Docker já faz aqui
+RUN if [ -f package.json ]; then npm install && npm run build; fi
+
+# Garantir a existência de TODAS as pastas críticas do Laravel
+RUN mkdir -p storage/logs \
+    storage/framework/cache/data \
+    storage/framework/sessions \
+    storage/framework/views \
+    bootstrap/cache
 
 # CONFIGURAÇÃO DO LITESPEED: Altera o Document Root para a pasta /public
 RUN sed -i 's|docRoot                   $VH_ROOT/html|docRoot                   $VH_ROOT/html/public|g' /usr/local/lsws/conf/vhosts/Example/vhconf.conf
 
-# PERMISSÕES: Ajusta as pastas do Laravel para o usuário do LiteSpeed (nobody)
+# PERMISSÕES: Aplica a propriedade para o usuário do LiteSpeed (nobody)
 RUN chown -R nobody:nogroup /var/www/vhosts/localhost/html \
-    && chmod -R 775 /var/www/vhosts/localhost/html/storage \
-    && chmod -R 775 /var/www/vhosts/localhost/html/bootstrap/cache
+    && chmod -R 775 /var/www/vhosts/localhost/html
 
-# CONFIGURAÇÃO DO CRON CORRIGIDA: Usa o link simbólico do PHP global
-RUN echo "* * * * * nobody cd /var/www/vhosts/localhost/html && php artisan schedule:run >> /dev/null 2>&1" > /etc/cron.d/laravel-cron
-RUN chmod 0644 /etc/cron.d/laravel-cron && crontab /etc/cron.d/laravel-cron
+# CONFIGURAÇÃO DO CRON
+RUN echo "* * * * * nobody cd /var/www/vhosts/localhost/html && php artisan schedule:run >> /dev/null 2>&1" > /etc/cron.d/laravel-cron \
+    && chmod 0644 /etc/cron.d/laravel-cron \
+    && crontab /etc/cron.d/laravel-cron
 
-# SCRIPT DE INICIALIZAÇÃO AJUSTADO: Limpa qualquer cache antigo antes de abrir o servidor
+# SCRIPT DE INICIALIZAÇÃO: Limpa os caches no boot
 RUN echo '#!/bin/bash\n\
 cd /var/www/vhosts/localhost/html\n\
 php artisan config:clear\n\
@@ -48,5 +64,4 @@ php artisan cache:clear\n\
 service cron start\n\
 /entrypoint.sh' > /start.sh && chmod +x /start.sh
 
-# Define o novo script como a inicialização padrão
 ENTRYPOINT ["/start.sh"]
