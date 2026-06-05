@@ -1,0 +1,50 @@
+FROM litespeedtech/openlitespeed:1.7.19-lsphp82
+
+# Instalar extensões PHP necessárias, utilitários e o CRON
+RUN apt-get update && apt-get install -y \
+    lsphp82-mysql \
+    lsphp82-imap \
+    lsphp82-intl \
+    lsphp82-curl \
+    lsphp82-common \
+    git \
+    unzip \
+    cron \
+    && rm -rf /var/lib/apt/lists/*
+
+# Configurar o diretório de trabalho padrão dentro do container
+WORKDIR /var/www/vhosts/localhost
+
+# Copiar os arquivos do seu projeto para a pasta 'html'
+COPY . ./html
+
+# Garantir a existência de TODAS as pastas críticas do Laravel antes do deploy
+RUN mkdir -p html/storage/logs \
+    html/storage/framework/cache/data \
+    html/storage/framework/sessions \
+    html/storage/framework/views \
+    html/bootstrap/cache
+
+# CONFIGURAÇÃO DO LITESPEED: Altera o Document Root para a pasta /public
+RUN sed -i 's|docRoot                   $VH_ROOT/html|docRoot                   $VH_ROOT/html/public|g' /usr/local/lsws/conf/vhosts/Example/vhconf.conf
+
+# PERMISSÕES: Ajusta as pastas do Laravel para o usuário do LiteSpeed (nobody)
+RUN chown -R nobody:nogroup /var/www/vhosts/localhost/html/storage \
+    && chown -R nobody:nogroup /var/www/vhosts/localhost/html/bootstrap/cache \
+    && chmod -R 775 /var/www/vhosts/localhost/html/storage \
+    && chmod -R 775 /var/www/vhosts/localhost/html/bootstrap/cache
+
+# CONFIGURAÇÃO DO CRON: 
+# Escreve a tarefa executando como o usuário 'nobody' (evita problemas de permissão nos logs)
+RUN echo "* * * * * nobody cd /var/www/vhosts/localhost/html && /usr/local/lsws/lsphp82/bin/php artisan schedule:run >> /dev/null 2>&1" > /etc/cron.d/laravel-cron
+
+# Dar a permissão correta para o arquivo do cron ser executado pelo sistema
+RUN chmod 0644 /etc/cron.d/laravel-cron && crontab /etc/cron.d/laravel-cron
+
+# SCRIPT DE INICIALIZAÇÃO: Cria um comando para rodar o Cron e o LiteSpeed juntos
+RUN echo '#!/bin/bash\n\
+service cron start\n\
+/entrypoint.sh' > /start.sh && chmod +x /start.sh
+
+# Define o novo script como a inicialização padrão
+ENTRYPOINT ["/start.sh"]
