@@ -12,6 +12,9 @@ RUN apt-get update && apt-get install -y \
     cron \
     && rm -rf /var/lib/apt/lists/*
 
+# Criar um link simbólico para garantir que o comando 'php' chame o PHP 8.2 correto com todos os pacotes do CLI
+RUN ln -sf /usr/local/lsws/lsphp82/bin/php /usr/bin/php
+
 # Configurar o diretório de trabalho padrão dentro do container
 WORKDIR /var/www/vhosts/localhost
 
@@ -29,20 +32,19 @@ RUN mkdir -p html/storage/logs \
 RUN sed -i 's|docRoot                   $VH_ROOT/html|docRoot                   $VH_ROOT/html/public|g' /usr/local/lsws/conf/vhosts/Example/vhconf.conf
 
 # PERMISSÕES: Ajusta as pastas do Laravel para o usuário do LiteSpeed (nobody)
-RUN chown -R nobody:nogroup /var/www/vhosts/localhost/html/storage \
-    && chown -R nobody:nogroup /var/www/vhosts/localhost/html/bootstrap/cache \
+RUN chown -R nobody:nogroup /var/www/vhosts/localhost/html \
     && chmod -R 775 /var/www/vhosts/localhost/html/storage \
     && chmod -R 775 /var/www/vhosts/localhost/html/bootstrap/cache
 
-# CONFIGURAÇÃO DO CRON: 
-# Escreve a tarefa executando como o usuário 'nobody' (evita problemas de permissão nos logs)
-RUN echo "* * * * * nobody cd /var/www/vhosts/localhost/html && /usr/local/lsws/lsphp82/bin/php artisan schedule:run >> /dev/null 2>&1" > /etc/cron.d/laravel-cron
-
-# Dar a permissão correta para o arquivo do cron ser executado pelo sistema
+# CONFIGURAÇÃO DO CRON CORRIGIDA: Usa o link simbólico do PHP global
+RUN echo "* * * * * nobody cd /var/www/vhosts/localhost/html && php artisan schedule:run >> /dev/null 2>&1" > /etc/cron.d/laravel-cron
 RUN chmod 0644 /etc/cron.d/laravel-cron && crontab /etc/cron.d/laravel-cron
 
-# SCRIPT DE INICIALIZAÇÃO: Cria um comando para rodar o Cron e o LiteSpeed juntos
+# SCRIPT DE INICIALIZAÇÃO AJUSTADO: Limpa qualquer cache antigo antes de abrir o servidor
 RUN echo '#!/bin/bash\n\
+cd /var/www/vhosts/localhost/html\n\
+php artisan config:clear\n\
+php artisan cache:clear\n\
 service cron start\n\
 /entrypoint.sh' > /start.sh && chmod +x /start.sh
 
