@@ -1,6 +1,6 @@
 FROM litespeedtech/openlitespeed:1.7.19-lsphp82
 
-# Instalar extensões PHP, utilitários, CRON e ferramentas de build (Node.js e Composer)
+# Instalar extensões PHP, utilitários, CRON e ferramentas de build atualizadas (Node.js 22 e Composer)
 RUN apt-get update && apt-get install -y \
     lsphp82-mysql \
     lsphp82-imap \
@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y \
     cron \
     curl \
     && curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer \
-    && curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
@@ -29,12 +29,12 @@ COPY . .
 RUN find . -type f -name "*.php" -exec sed -i 's/->getApplication()/->getLaravel()/g' {} +
 
 # Limpar qualquer resquício antigo de dependências para evitar conflitos
-RUN rm -rf vendor node_modules
+RUN rm -rf vendor node_modules package-lock.json
 
 # Rodar o Composer de forma limpa e nativa no PHP 8.2
 RUN composer install --no-dev --optimize-autoloader --no-interaction --ignore-platform-reqs
 
-# Se o projeto precisar de build do front-end, o Docker já faz aqui
+# Executar a instalação do NPM e build do front-end com o Node 22 limpo
 RUN if [ -f package.json ]; then npm install && npm run build; fi
 
 # Garantir a existência de TODAS as pastas críticas do Laravel
