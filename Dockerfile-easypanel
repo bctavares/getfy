@@ -25,41 +25,37 @@ WORKDIR /var/www/vhosts/localhost/html
 # Copiar os arquivos do seu projeto
 COPY . .
 
-# Limpar qualquer resquício antigo de dependências para evitar conflitos
-RUN rm -rf vendor node_modules package-lock.json
-
-# 1º: Baixa todas as dependências do PHP e do Front-end
-RUN composer install --no-dev --optimize-autoloader --no-interaction --ignore-platform-reqs
-RUN if [ -f package.json ]; then npm install && npm run build; fi
-
-# 2º: AGORA SIM! Com toda a pasta 'vendor' baixada, aplicamos a correção em absolutamente TUDO
-RUN find . -type f -name "*.php" -exec sed -i 's/->getApplication()/->getLaravel()/g' {} +
-
-# Garantir a existência de TODAS as pastas críticas do Laravel
-RUN mkdir -p storage/logs \
-    storage/framework/cache/data \
-    storage/framework/sessions \
-    storage/framework/views \
-    bootstrap/cache
+# Limpar e rodar o Composer/NPM no build para garantir que as dependências existam na imagem
+RUN rm -rf vendor node_modules package-lock.json \
+    && composer install --no-dev --optimize-autoloader --no-interaction --ignore-platform-reqs \
+    && if [ -f package.json ]; then npm install && npm run build; fi
 
 # CONFIGURAÇÃO DO LITESPEED: Altera o Document Root para a pasta /public
 RUN sed -i 's|docRoot                   $VH_ROOT/html|docRoot                   $VH_ROOT/html/public|g' /usr/local/lsws/conf/vhosts/Example/vhconf.conf
-
-# PERMISSÕES: Aplica a propriedade para o usuário do LiteSpeed (nobody)
-RUN chown -R nobody:nogroup /var/www/vhosts/localhost/html \
-    && chmod -R 775 /var/www/vhosts/localhost/html
 
 # CONFIGURAÇÃO DO CRON
 RUN echo "* * * * * nobody cd /var/www/vhosts/localhost/html && php artisan schedule:run >> /dev/null 2>&1" > /etc/cron.d/laravel-cron \
     && chmod 0644 /etc/cron.d/laravel-cron \
     && crontab /etc/cron.d/laravel-cron
 
-# SCRIPT DE INICIALIZAÇÃO: Limpa os caches no boot
-RUN echo '#!/bin/bash\n\
-cd /var/www/vhosts/localhost/html\n\
-php artisan config:clear\n\
-php artisan cache:clear\n\
-service cron start\n\
-/entrypoint.sh' > /start.sh && chmod +x /start.sh
+# O PULO DO GATO: Cria o script de boot que força a correção em tempo de execução
+RUN echo '#!/bin/bash' > /start.sh && \
+    echo 'cd /var/www/vhosts/localhost/html' >> /start.sh && \
+    echo '# 1. Forçar a correção do método diretamente em todos os arquivos extraídos no volume' >> /start.sh && \
+    echo 'find . -type f -name "*.php" -exec sed -i -E "s/->getApplication\s*\(\)/->getLaravel()/g" {} +' >> /start.sh && \
+    echo '# 2. Injetar o método de compatibilidade diretamente no Kernel do Laravel caso algum pacote chame de forma estática' >> /start.sh && \
+    echo 'if [ -f vendor/laravel/framework/src/Illuminate/Foundation/Console/Kernel.php ]; then' >> /start.sh && \
+    echo '    sed -i "/class Kernel/a \    public function getApplication() { return \$this->getLaravel(); }" vendor/laravel/framework/src/Illuminate/Foundation/Console/Kernel.php' >> /start.sh && \
+    echo 'fi' >> /start.sh && \
+    echo '# 3. Garantir permissões absolutas de escrita e posse' >> /start.sh && \
+    echo 'mkdir -p storage/logs storage/framework/cache/data storage/framework/sessions storage/framework/views bootstrap/cache' >> /start.sh && \
+    echo 'chown -R nobody:nogroup /var/www/vhosts/localhost/html' >> /start.sh && \
+    echo 'chmod -R 775 storage bootstrap/cache' >> /start.sh && \
+    echo '# 4. Limpar os caches internos' >> /start.sh && \
+    echo 'php artisan config:clear' >> /start.sh && \
+    echo 'php artisan cache:clear' >> /start.sh && \
+    echo 'service cron start' >> /start.sh && \
+    echo '/entrypoint.sh' >> /start.sh && \
+    chmod +x /start.sh
 
 ENTRYPOINT ["/start.sh"]
